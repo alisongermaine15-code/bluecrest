@@ -48,7 +48,7 @@ export default function AdminCommunications({ users }: { users: any[] }) {
     try {
       const result = await apiRequest<any>('/api/v1/admin/email/send', {
         method: 'POST',
-        body: JSON.stringify({ ...email, html: email.message.replace(/\n/g, '<br>'), ...recipientPayload })
+        body: JSON.stringify({ ...email, ...recipientPayload })
       });
       setMessage(
         result.failed_count
@@ -89,6 +89,7 @@ export default function AdminCommunications({ users }: { users: any[] }) {
       <div className="min-w-0 space-y-4 rounded-2xl border border-slate-100 bg-white p-4 sm:rounded-[2rem] sm:p-6">
         <h3 className="font-extrabold flex items-center gap-2"><Send className="w-5 h-5 text-[#003399]" /> Compose email</h3>
         <RecipientPicker users={users} selected={selectedUsers} sendToAll={sendToAll} onAll={setSendToAll} onToggle={toggleUser} />
+        <p className="text-xs leading-5 text-slate-500">Messages use the Blue Crest email design and greet each recipient by first name.</p>
         <input value={email.subject} onChange={e => setEmail(value => ({ ...value, subject: e.target.value }))} className="field-control" placeholder="Email subject" />
         <textarea value={email.message} onChange={e => setEmail(value => ({ ...value, message: e.target.value }))} className="w-full min-h-36 field-control py-3" placeholder="Write your message…" />
         <button disabled={busy} onClick={sendEmail} className="w-full py-3 bg-slate-900 text-white rounded-xl text-xs font-bold">{busy ? 'Sending…' : 'Send email'}</button>

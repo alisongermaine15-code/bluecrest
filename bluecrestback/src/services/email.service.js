@@ -9,6 +9,8 @@ const userRepository = require('../repositories/user.repository');
 
 let zohoAccessToken = null;
 let zohoAccessTokenExpiresAt = 0;
+let zohoAccessTokenKey = '';
+let zohoAccountCache = { key: '', accountId: '' };
 
 function zohoConfig() {
     const config = {
@@ -22,7 +24,7 @@ function zohoConfig() {
     };
     config.enabled = Boolean(
         config.clientId && config.clientSecret && config.refreshToken &&
-        config.accountId && config.senderEmail
+        config.senderEmail
     );
     return config;
 }
@@ -34,7 +36,10 @@ async function readJsonResponse(response, operation) {
         ? payload.error
         : payload?.error?.message || payload?.error?.code;
     if (!response.ok || oauthError || (apiCode && apiCode >= 400)) {
-        const description = payload?.error_description || payload?.status?.description || oauthError || payload?.message;
+        const invalidRefreshToken = operation === 'authentication' && oauthError === 'invalid_code';
+        const description = invalidRefreshToken
+            ? 'the configured ZOHO_REFRESH_TOKEN was rejected. Use the refresh_token returned after exchanging a fresh Self Client authorization code, and make sure ZOHO_ACCOUNTS_URL matches your Zoho data center'
+            : payload?.error_description || payload?.status?.description || oauthError || payload?.message;
         throw new Error(`Zoho Mail ${operation} failed${description ? `: ${description}` : ` (HTTP ${response.status})`}`);
     }
     return payload;
@@ -43,7 +48,11 @@ async function readJsonResponse(response, operation) {
 async function getZohoAccessToken() {
     const config = zohoConfig();
     if (!config.enabled) throw new Error('Zoho Mail API settings are incomplete');
-    if (zohoAccessToken && Date.now() < zohoAccessTokenExpiresAt) return zohoAccessToken;
+    const tokenKey = [config.accountsUrl, config.clientId, config.refreshToken].join('|');
+    if (
+        zohoAccessToken && zohoAccessTokenKey === tokenKey &&
+        Date.now() < zohoAccessTokenExpiresAt
+    ) return zohoAccessToken;
 
     const body = new URLSearchParams({
         client_id: config.clientId,
@@ -61,8 +70,58 @@ async function getZohoAccessToken() {
     if (!payload.access_token) throw new Error('Zoho Mail authentication failed: no access token was returned');
 
     zohoAccessToken = payload.access_token;
+    zohoAccessTokenKey = tokenKey;
     zohoAccessTokenExpiresAt = Date.now() + Math.max(60, Number(payload.expires_in || 3600) - 60) * 1000;
     return zohoAccessToken;
+}
+
+function collectEmailAddresses(value, addresses = new Set()) {
+    if (typeof value === 'string') {
+        const matches = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+        for (const match of matches) addresses.add(match.toLowerCase());
+    } else if (Array.isArray(value)) {
+        for (const item of value) collectEmailAddresses(item, addresses);
+    } else if (value && typeof value === 'object') {
+        for (const item of Object.values(value)) collectEmailAddresses(item, addresses);
+    }
+    return addresses;
+}
+
+async function resolveZohoAccountId(config, accessToken) {
+    if (config.accountId) return config.accountId;
+
+    const cacheKey = `${config.mailApiUrl}|${config.senderEmail.toLowerCase()}`;
+    if (zohoAccountCache.key === cacheKey && zohoAccountCache.accountId) {
+        return zohoAccountCache.accountId;
+    }
+
+    const response = await fetch(`${config.mailApiUrl}/api/accounts`, {
+        method: 'GET',
+        headers: {
+            Accept: 'application/json',
+            Authorization: `Zoho-oauthtoken ${accessToken}`
+        },
+        signal: AbortSignal.timeout(15000)
+    });
+    const payload = await readJsonResponse(response, 'account discovery');
+    const accounts = (Array.isArray(payload.data) ? payload.data : [payload.data])
+        .filter(account => account && (account.accountId || account.accountID || account.id));
+    const senderEmail = config.senderEmail.toLowerCase();
+    const matchedAccount = accounts.find(account => collectEmailAddresses(account).has(senderEmail));
+    const selectedAccount = matchedAccount || (accounts.length === 1 ? accounts[0] : null);
+
+    if (!selectedAccount) {
+        throw new Error(
+            `Zoho Mail account discovery could not match MAIL_FROM=${config.senderEmail}. ` +
+            'Set ZOHO_ACCOUNT_ID explicitly or use an address/alias owned by this Zoho account.'
+        );
+    }
+
+    const accountId = String(
+        selectedAccount.accountId || selectedAccount.accountID || selectedAccount.id
+    );
+    zohoAccountCache = { key: cacheKey, accountId };
+    return accountId;
 }
 
 async function uploadZohoAttachments(config, accessToken, attachments) {
@@ -99,6 +158,7 @@ async function uploadZohoAttachments(config, accessToken, attachments) {
 async function sendZohoEmail({ to, subject, html, text, attachments = [] }) {
     const config = zohoConfig();
     const accessToken = await getZohoAccessToken();
+    config.accountId = await resolveZohoAccountId(config, accessToken);
     const uploadedAttachments = attachments.length
         ? await uploadZohoAttachments(config, accessToken, attachments)
         : [];
@@ -465,8 +525,8 @@ async function sendAccountRestrictionEmail(user) {
 
 async function sendAdminEmail(admin, data) {
     const subject = String(data.subject || '').trim();
-    const html = String(data.html || data.message || '').trim();
-    if (!subject || !html) throw new Error('Subject and message are required');
+    const message = String(data.message || '').trim();
+    if (!subject || !message) throw new Error('Subject and message are required');
     const users = await userRepository.getAllUsers();
     const ids = new Set((data.user_ids || []).map(Number));
     const recipients = data.send_to_all
@@ -483,7 +543,15 @@ async function sendAdminEmail(admin, data) {
             sent_by: admin.id
         });
         try {
-            const info = await sendEmail({ to: recipient.email, subject, html, text: data.message });
+            const formattedMessage = escapeHtml(message).replace(/\r?\n/g, '<br>');
+            const html = emailShell(subject, recipient.first_name, `
+                <div style="font-size:15px;line-height:1.7;color:#27324a">${formattedMessage}</div>
+                <div style="border-top:1px solid #e7eaf0;margin-top:28px;padding-top:20px;color:#4b5563">
+                    <p style="margin:0">Regards,</p>
+                    <p style="margin:5px 0 0;font-weight:700;color:#003399">Blue Crest Support Team</p>
+                </div>`);
+            const text = `Hello ${recipient.first_name || 'Customer'},\n\n${message}\n\nRegards,\nBlue Crest Support Team`;
+            const info = await sendEmail({ to: recipient.email, subject, html, text });
             await emailRepository.updateLog(log.id, {
                 status: 'SENT',
                 provider_message_id: info.messageId

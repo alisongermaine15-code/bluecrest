@@ -13,6 +13,7 @@ const args = new Map(process.argv.slice(2).map(argument => {
   return [key, value.join('=') || true];
 }));
 const quoteIdentifier = value => `"${String(value).replaceAll('"', '""')}"`;
+const quoteLiteral = value => `'${String(value).replaceAll("'", "''")}'`;
 const publicTable = value => `public.${quoteIdentifier(value)}`;
 
 function usage() {
@@ -70,26 +71,35 @@ async function inspectTarget(client, archive) {
   const identity = (await client.query(`
     SELECT current_database() AS database, current_user AS database_user
   `)).rows[0];
-  const targetTables = (await client.query(`
-    SELECT table_name FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-  `)).rows.map(row => row.table_name);
+  const schemaRows = (await client.query(`
+    SELECT table_name, column_name FROM information_schema.columns
+    WHERE table_schema = 'public'
+    ORDER BY table_name, ordinal_position
+  `)).rows;
+  const targetColumns = new Map();
+  for (const row of schemaRows) {
+    if (!targetColumns.has(row.table_name)) targetColumns.set(row.table_name, new Set());
+    targetColumns.get(row.table_name).add(row.column_name);
+  }
+  const targetTables = [...targetColumns.keys()];
   const missingTables = Object.keys(archive.tables).filter(name => !targetTables.includes(name));
   if (missingTables.length) throw new Error(`Target schema is not initialized. Missing tables: ${missingTables.join(', ')}`);
 
-  const counts = {};
   const missingColumns = [];
   for (const [tableName, table] of Object.entries(archive.tables)) {
-    const columns = (await client.query(`
-      SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = $1
-    `, [tableName])).rows.map(row => row.column_name);
+    const columns = targetColumns.get(tableName);
     for (const column of table.columns) {
-      if (!columns.includes(column.column_name)) missingColumns.push(`${tableName}.${column.column_name}`);
+      if (!columns.has(column.column_name)) missingColumns.push(`${tableName}.${column.column_name}`);
     }
-    counts[tableName] = Number((await client.query(`SELECT COUNT(*)::int AS count FROM ${publicTable(tableName)}`)).rows[0].count);
   }
   if (missingColumns.length) throw new Error(`Target schema is missing backup columns: ${missingColumns.join(', ')}`);
+
+  const countSql = Object.keys(archive.tables).map(tableName =>
+    `SELECT ${quoteLiteral(tableName)} AS table_name, COUNT(*)::int AS count FROM ${publicTable(tableName)}`
+  ).join(' UNION ALL ');
+  const counts = Object.fromEntries(
+    (await client.query(countSql)).rows.map(row => [row.table_name, Number(row.count)])
+  );
   return { identity, counts };
 }
 

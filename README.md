@@ -34,6 +34,11 @@ For Neon, use the rotated Neon connection string as a sealed Railway
 control, build arguments, or support messages. The application initializes its
 schema at runtime and reports `managed-postgres` through `/api/v1/health`.
 
+For Zoho Mail API delivery, set `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`,
+`ZOHO_REFRESH_TOKEN`, and `MAIL_FROM`. `ZOHO_ACCOUNT_ID` is optional: when it
+is omitted, the backend uses `ZohoMail.accounts.READ` to discover the account
+or alias matching `MAIL_FROM`.
+
 ### Restore the downloaded Neon backup
 
 Validate the rescue archive without connecting to a database:

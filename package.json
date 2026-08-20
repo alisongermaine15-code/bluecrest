@@ -10,6 +10,7 @@
     "build": "vite build --configLoader runner && node scripts/build-server.mjs",
     "start": "node dist/server.cjs",
     "db:restore:neon": "node scripts/restore-neon-json.mjs",
+    "zoho:setup": "node scripts/setup-zoho-oauth.mjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },

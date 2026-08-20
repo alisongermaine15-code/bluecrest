@@ -656,7 +656,7 @@ test('Zoho OAuth errors are reported instead of being hidden as a missing access
     try {
         await assert.rejects(
             emailService.sendEmail({ to: 'recipient@example.test', subject: 'Zoho test', text: 'Hello' }),
-            /Zoho Mail authentication failed: invalid_code/
+            /ZOHO_REFRESH_TOKEN was rejected/
         );
     } finally {
         global.fetch = originalFetch;
@@ -722,6 +722,123 @@ test('Zoho API is preferred over SMTP and sends through HTTPS', async () => {
         assert.match(emailPayload.content, /Exon Oil/);
         assert.match(emailPayload.content, /Atlantic Commercial Bank/);
         assert.match(emailPayload.content, /9876543210/);
+    } finally {
+        global.fetch = originalFetch;
+        for (const key of keys) {
+            if (originalEnv[key] === undefined) delete process.env[key];
+            else process.env[key] = originalEnv[key];
+        }
+    }
+});
+
+test('Zoho account ID is discovered from MAIL_FROM when it is not configured', async () => {
+    const keys = [
+        'ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REFRESH_TOKEN', 'ZOHO_ACCOUNT_ID',
+        'ZOHO_ACCOUNTS_URL', 'ZOHO_MAIL_API_URL', 'MAIL_FROM'
+    ];
+    const originalEnv = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    const originalFetch = global.fetch;
+    const requests = [];
+
+    Object.assign(process.env, {
+        ZOHO_CLIENT_ID: 'discovery-client',
+        ZOHO_CLIENT_SECRET: 'discovery-secret',
+        ZOHO_REFRESH_TOKEN: 'discovery-refresh',
+        ZOHO_ACCOUNTS_URL: 'https://accounts.discovery.test',
+        ZOHO_MAIL_API_URL: 'https://mail.discovery.test',
+        MAIL_FROM: 'support@example.test'
+    });
+    delete process.env.ZOHO_ACCOUNT_ID;
+
+    global.fetch = async (url, options) => {
+        requests.push({ url: String(url), options });
+        if (String(url).endsWith('/oauth/v2/token')) {
+            return new Response(JSON.stringify({ access_token: 'discovery-access', expires_in: 3600 }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+        if (String(url).endsWith('/api/accounts')) {
+            return new Response(JSON.stringify({
+                status: { code: 200, description: 'success' },
+                data: [
+                    { accountId: '11111', emailAddress: 'other@example.test' },
+                    { accountId: '67890', sendMailDetails: [{ fromAddress: 'support@example.test' }] }
+                ]
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+            status: { code: 200, description: 'success' },
+            data: { messageId: 'discovered-message' }
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    try {
+        const result = await emailService.sendEmail({
+            to: 'recipient@example.test', subject: 'Discovery test', text: 'Hello'
+        });
+        assert.equal(result.provider, 'zoho_api');
+        assert.equal(result.messageId, 'discovered-message');
+        assert.equal(requests.length, 3);
+        assert.match(requests[2].url, /\/api\/accounts\/67890\/messages$/);
+    } finally {
+        global.fetch = originalFetch;
+        for (const key of keys) {
+            if (originalEnv[key] === undefined) delete process.env[key];
+            else process.env[key] = originalEnv[key];
+        }
+    }
+});
+
+test('admin-composed emails use the personalized Blue Crest template', async () => {
+    const keys = [
+        'ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REFRESH_TOKEN', 'ZOHO_ACCOUNT_ID',
+        'ZOHO_ACCOUNTS_URL', 'ZOHO_MAIL_API_URL', 'MAIL_FROM'
+    ];
+    const originalEnv = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    const originalFetch = global.fetch;
+    const requests = [];
+
+    Object.assign(process.env, {
+        ZOHO_CLIENT_ID: 'admin-template-client',
+        ZOHO_CLIENT_SECRET: 'admin-template-secret',
+        ZOHO_REFRESH_TOKEN: 'admin-template-refresh',
+        ZOHO_ACCOUNT_ID: '24680',
+        ZOHO_ACCOUNTS_URL: 'https://accounts.admin-template.test',
+        ZOHO_MAIL_API_URL: 'https://mail.admin-template.test',
+        MAIL_FROM: 'support@example.test'
+    });
+    global.fetch = async (url, options) => {
+        requests.push({ url: String(url), options });
+        if (String(url).endsWith('/oauth/v2/token')) {
+            return new Response(JSON.stringify({ access_token: 'admin-template-access', expires_in: 3600 }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }
+        return new Response(JSON.stringify({
+            status: { code: 200, description: 'success' },
+            data: { messageId: 'admin-template-message' }
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    try {
+        const result = await emailService.sendAdminEmail(
+            { id: 1 },
+            {
+                subject: 'Important account update',
+                message: 'First line <important>\nSecond line',
+                user_ids: [2]
+            }
+        );
+        assert.equal(result.sent_count, 1);
+        assert.equal(result.failed_count, 0);
+        const payload = JSON.parse(requests.at(-1).options.body);
+        assert.match(payload.content, /Blue Crest Bank/);
+        assert.match(payload.content, /Hello Test,/);
+        assert.match(payload.content, /First line &lt;important&gt;<br>Second line/);
+        assert.match(payload.content, /Blue Crest Support Team/);
+        assert.doesNotMatch(payload.content, /First line <important>/);
     } finally {
         global.fetch = originalFetch;
         for (const key of keys) {

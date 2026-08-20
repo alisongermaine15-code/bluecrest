@@ -9,6 +9,8 @@ coverage/
 !.env.example
 neon-export-url.private
 neon-restore-url.private
+zoho-oauth.private
+zoho-railway.private
 emergency-backups/neon-export/
 mysshkey
 mysshkey.pub
