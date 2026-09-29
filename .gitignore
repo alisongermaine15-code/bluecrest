@@ -11,7 +11,10 @@ neon-export-url.private
 neon-restore-url.private
 zoho-oauth.private
 zoho-railway.private
-emergency-backups/neon-export/
+emergency-backups/
+THEZIP/
+*.db-shm
+*.db-wal
 mysshkey
 mysshkey.pub
 alvexpush_railway_key

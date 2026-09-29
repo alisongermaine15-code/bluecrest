@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Shield, Lock, User, ArrowRight, Smartphone, Globe, Coins, Mail, UserCheck, Landmark, PiggyBank, CalendarClock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LANGUAGES, getTranslation, LanguageCode } from '../lib/translations';
@@ -214,6 +214,8 @@ export default function LoginPage({ onLogin, lang, onLanguageChange }: LoginPage
   const [registrationEmailChallengeToken, setRegistrationEmailChallengeToken] = useState('');
   const [registrationEmailCode, setRegistrationEmailCode] = useState('');
   const [registrationMaskedEmail, setRegistrationMaskedEmail] = useState('');
+  const loginCodeInputRef = useRef<HTMLInputElement>(null);
+  const emailCodeInputRef = useRef<HTMLInputElement>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -221,6 +223,18 @@ export default function LoginPage({ onLogin, lang, onLanguageChange }: LoginPage
 
   const t = (key: string, fb: string = "") => getTranslation(lang, key, fb);
   const activeDirection = LANGUAGES.find(l => l.code === lang)?.direction || 'ltr';
+
+  useEffect(() => {
+    if (view !== 'login') return;
+    const input = step === 3 ? loginCodeInputRef.current : step === 4 ? emailCodeInputRef.current : null;
+    if (!input) return;
+    const focusInput = () => {
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(input.value.length, input.value.length);
+    };
+    const frame = window.requestAnimationFrame(focusInput);
+    return () => window.cancelAnimationFrame(frame);
+  }, [step, view]);
 
   const handleLoginNext = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -736,7 +750,7 @@ export default function LoginPage({ onLogin, lang, onLanguageChange }: LoginPage
                       </div>
                       <div className="relative">
                         <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
-                        <input type="password" inputMode="numeric" autoComplete="one-time-code" maxLength={4} value={loginCode} onChange={e => setLoginCode(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder={t('placeholderLoginCode', '4-digit login code')} className="w-full h-14 bg-slate-50 border border-slate-100 rounded-xl pl-12 pr-4 text-lg tracking-[0.5em] font-extrabold focus:bg-white focus:border-blue-200 outline-none transition-all" required autoFocus />
+                        <input ref={loginCodeInputRef} type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code" enterKeyHint="done" maxLength={4} value={loginCode} onChange={e => setLoginCode(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder={t('placeholderLoginCode', '4-digit login code')} className="w-full h-14 bg-slate-50 border border-slate-100 rounded-xl pl-12 pr-4 text-lg tracking-[0.5em] font-extrabold focus:bg-white focus:border-blue-200 outline-none transition-all" required autoFocus />
                       </div>
                       {loginCodeSetupRequired && <div className="relative">
                         <Shield className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
@@ -759,8 +773,11 @@ export default function LoginPage({ onLogin, lang, onLanguageChange }: LoginPage
                         <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300" />
                         <input
                           type="text"
+                          ref={emailCodeInputRef}
                           inputMode="numeric"
+                          pattern="[0-9]*"
                           autoComplete="one-time-code"
+                          enterKeyHint="done"
                           maxLength={6}
                           value={emailCode}
                           onChange={(event) => setEmailCode(event.target.value.replace(/\D/g, '').slice(0, 6))}

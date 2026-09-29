@@ -7,7 +7,7 @@ import {defineConfig, loadEnv} from 'vite';
 const projectRoot = fileURLToPath(new URL('.', import.meta.url));
 const backendRoot = fileURLToPath(new URL('./bluecrestback/', import.meta.url));
 
-function localBackendPlugin() {
+function localBackendPlugin(runtimeEnv: Record<string, string>) {
   const waitForBackend = async (timeoutMs = 15000) => {
     const deadline = Date.now() + timeoutMs;
 
@@ -64,6 +64,7 @@ function localBackendPlugin() {
         stdio: 'inherit',
         env: {
           ...process.env,
+          ...runtimeEnv,
           NODE_ENV: 'development',
           DB_PROVIDER: 'sqlite',
         },
@@ -90,7 +91,7 @@ function localBackendPlugin() {
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
-    plugins: [react(), tailwindcss(), localBackendPlugin()],
+    plugins: [react(), tailwindcss(), localBackendPlugin(env)],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },

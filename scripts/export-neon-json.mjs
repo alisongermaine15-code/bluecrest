@@ -2,20 +2,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import dns from 'node:dns';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import 'dotenv/config';
 
 const { Client } = pg;
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const workspace = path.resolve(scriptDirectory, '..');
 const credentialFile = path.join(workspace, 'neon-export-url.private');
 
-const credentialText = fs.readFileSync(credentialFile, 'utf8');
+const credentialText = fs.existsSync(credentialFile)
+  ? fs.readFileSync(credentialFile, 'utf8')
+  : '';
 const databaseLine = credentialText.split(/\r?\n/).find(line => line.startsWith('NEON_DATABASE_URL='));
-const connectionString = databaseLine?.slice('NEON_DATABASE_URL='.length).trim().replace(/^['"]|['"]$/g, '');
+const connectionString = (
+  databaseLine?.slice('NEON_DATABASE_URL='.length)
+  || process.env.NEON_DATABASE_URL
+  || process.env.DATABASE_URL
+)?.trim().replace(/^['"]|['"]$/g, '');
 
 if (!connectionString || !/^postgres(ql)?:\/\//.test(connectionString)) {
-  throw new Error('A complete Neon PostgreSQL URL is required in neon-export-url.private.');
+  throw new Error('A complete Neon PostgreSQL URL is required in .env or neon-export-url.private.');
 }
 
 const quoteIdentifier = value => `"${String(value).replaceAll('"', '""')}"`;
@@ -33,6 +41,7 @@ const timestamp = new Date().toISOString().replaceAll(':', '').replaceAll('.', '
 const backupDirectory = path.join(workspace, 'emergency-backups', 'neon-export');
 const archivePath = path.join(backupDirectory, `bluecrest-neon-data-${timestamp}.json.gz`);
 const manifestPath = `${archivePath}.manifest.json`;
+const checksumPath = `${archivePath}.sha256.txt`;
 
 fs.mkdirSync(backupDirectory, { recursive: true });
 
@@ -123,6 +132,9 @@ try {
     return value;
   });
   fs.writeFileSync(archivePath, zlib.gzipSync(json, { level: 9 }));
+  const checksum = crypto.createHash('sha256')
+    .update(fs.readFileSync(archivePath))
+    .digest('hex');
 
   const manifest = {
     format: archive.format,
@@ -130,6 +142,7 @@ try {
     database: archive.database,
     archive: archivePath,
     archive_bytes: fs.statSync(archivePath).size,
+    sha256: checksum,
     table_count: Object.keys(archive.tables).length,
     row_counts: Object.fromEntries(Object.entries(archive.tables).map(([name, value]) => [name, value.rows.length])),
     constraint_count: archive.constraints.length,
@@ -137,11 +150,13 @@ try {
     sequence_count: archive.sequences.length
   };
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-  fs.rmSync(credentialFile, { force: true });
+  fs.writeFileSync(checksumPath, `${checksum}  ${path.basename(archivePath)}\n`, 'ascii');
+  if (databaseLine) fs.rmSync(credentialFile, { force: true });
 
   process.stdout.write(`Archive: ${archivePath}\n`);
   process.stdout.write(`Manifest: ${manifestPath}\n`);
-  process.stdout.write('Temporary credential file removed.\n');
+  process.stdout.write(`Checksum: ${checksumPath}\n`);
+  if (databaseLine) process.stdout.write('Temporary credential file removed.\n');
 } catch (error) {
   try { await client.query('ROLLBACK'); } catch {}
   throw error;
